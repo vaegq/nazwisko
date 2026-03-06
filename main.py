@@ -1,60 +1,62 @@
 import streamlit as st
 import pandas as pd
+import requests
+import io
 
-# Bezpośrednie linki do zasobów 2025
-URL_MESKIE = "https://dane.gov.pl/en/dataset/1681/resource/63892/download"
-URL_ZENSKIE = "https://dane.gov.pl/en/dataset/1681/resource/63891/download"
+# Linki do zasobów 2025
+URL_M = "https://dane.gov.pl/en/dataset/1681/resource/63892/download"
+URL_Z = "https://dane.gov.pl/en/dataset/1681/resource/63891/download"
 
 st.set_page_config(page_title="PESEL 2025", layout="centered")
 
 @st.cache_data
-def load_data(url):
+def get_pesel_data(url):
     try:
-        # Próba wczytania z automatycznym separatorem i ignorowaniem błędnych linii
-        df = pd.read_csv(url, sep=None, engine='python', encoding='utf-8-sig', on_bad_lines='skip')
+        response = requests.get(url, timeout=10)
+        # Próba dekodowania z obsługą różnych formatów polskich znaków
+        content = response.content.decode('utf-8-sig', errors='ignore')
         
-        # Czyścimy nazwy kolumn ze spacji i niewidocznych znaków
-        df.columns = [str(c).strip() for c in df.columns]
+        # Wczytujemy z automatycznym wykrywaniem separatora
+        df = pd.read_csv(io.StringIO(content), sep=None, engine='python', on_bad_lines='skip')
         
-        # Mapowanie kolumn (szukamy tych, które zawierają kluczowe słowa)
-        col_n = next((c for c in df.columns if 'nazwisko' in c.lower()), None)
-        col_l = next((c for c in df.columns if 'liczba' in c.lower()), None)
+        # Usuwamy białe znaki z nagłówków i danych
+        df.columns = [str(c).strip().upper() for c in df.columns]
         
-        if col_n and col_l:
-            return df[[col_n, col_l]].rename(columns={col_n: 'Nazwisko', col_l: 'Liczba'})
+        # Znajdź kolumnę z nazwiskiem i liczbą po słowach kluczowych
+        col_n = [c for c in df.columns if 'NAZWISKO' in c][0]
+        col_l = [c for c in df.columns if 'LICZBA' in c][0]
+        
+        df = df[[col_n, col_l]].copy()
+        df.columns = ['NAZWISKO', 'LICZBA']
+        df['NAZWISKO'] = df['NAZWISKO'].astype(str).str.strip().str.upper()
+        df['LICZBA'] = pd.to_numeric(df['LICZBA'], errors='coerce').fillna(0).astype(int)
+        
         return df
     except Exception as e:
-        st.error(f"Problem z plikiem: {e}")
         return pd.DataFrame()
 
-st.title("📊 Licznik Nazwisk - PESEL 2025")
+st.title("📊 Oficjalny Licznik Nazwisk 2025")
 
-with st.spinner('Łączenie z bazą Ministerstwa...'):
-    df_m = load_data(URL_MESKIE)
-    df_f = load_data(URL_ZENSKIE)
+with st.spinner('Pobieranie bazy danych...'):
+    df_m = get_pesel_data(URL_M)
+    df_f = get_pesel_data(URL_Z)
 
 nazwisko = st.text_input("Wpisz nazwisko:", "NOWAK").strip().upper()
 
-if nazwisko:
-    # Bezpieczne wyciąganie wartości
-    def get_count(df, n):
-        if df.empty or 'Nazwisko' not in df.columns: return 0
-        match = df[df['Nazwisko'].astype(str).str.upper() == n]
-        return int(match['Liczba'].values[0]) if not match.empty else 0
-
-    m_val = get_count(df_m, nazwisko)
-    f_val = get_count(df_f, nazwisko)
+if not df_m.empty and not df_f.empty:
+    m_val = df_m[df_m['NAZWISKO'] == nazwisko]['LICZBA'].sum()
+    f_val = df_f[df_f['NAZWISKO'] == nazwisko]['LICZBA'].sum()
     total = m_val + f_val
 
-    st.divider()
     if total > 0:
+        st.divider()
         c1, c2, c3 = st.columns(3)
         c1.metric("RAZEM", f"{total:,}")
         c2.metric("Mężczyźni", f"{m_val:,}")
         c3.metric("Kobiety", f"{f_val:,}")
-        st.success(f"Dane aktualne na styczeń 2025 r.")
+        st.divider()
+        st.success("Dane załadowane poprawnie.")
     else:
-        st.warning(f"Brak nazwiska '{nazwisko}' w bazie (lub występuje < 2 razy).")
-    st.divider()
-
-st.caption("Dane pochodzą z portalu dane.gov.pl (Rejestr PESEL).")
+        st.error(f"Nie znaleziono nazwiska {nazwisko}. Sprawdź pisownię.")
+else:
+    st.error("Błąd pobierania bazy. Sprawdź połączenie z internetem.")
