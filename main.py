@@ -12,27 +12,38 @@ st.set_page_config(page_title="PESEL 2025", layout="centered")
 @st.cache_data
 def get_pesel_data(url):
     try:
-        response = requests.get(url, timeout=10)
-        # Próba dekodowania z obsługą różnych formatów polskich znaków
+        # Dodajemy nagłówki, aby serwer nie odrzucał połączenia
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        response = requests.get(url, headers=headers, timeout=15)
+        
+        # Sprawdzamy czy pobieranie się udało (kod 200)
+        if response.status_code != 200:
+            st.error(f"Serwer zwrócił błąd: {response.status_code}")
+            return pd.DataFrame()
+
         content = response.content.decode('utf-8-sig', errors='ignore')
         
-        # Wczytujemy z automatycznym wykrywaniem separatora
+        # Wczytujemy dane
         df = pd.read_csv(io.StringIO(content), sep=None, engine='python', on_bad_lines='skip')
         
-        # Usuwamy białe znaki z nagłówków i danych
+        # Czyszczenie nazw kolumn
         df.columns = [str(c).strip().upper() for c in df.columns]
         
-        # Znajdź kolumnę z nazwiskiem i liczbą po słowach kluczowych
-        col_n = [c for c in df.columns if 'NAZWISKO' in c][0]
-        col_l = [c for c in df.columns if 'LICZBA' in c][0]
+        # Inteligentne szukanie kolumn
+        col_n = next((c for c in df.columns if 'NAZWISKO' in c), None)
+        col_l = next((c for c in df.columns if 'LICZBA' in c), None)
         
-        df = df[[col_n, col_l]].copy()
-        df.columns = ['NAZWISKO', 'LICZBA']
-        df['NAZWISKO'] = df['NAZWISKO'].astype(str).str.strip().str.upper()
-        df['LICZBA'] = pd.to_numeric(df['LICZBA'], errors='coerce').fillna(0).astype(int)
-        
-        return df
+        if col_n and col_l:
+            df = df[[col_n, col_l]].copy()
+            df.columns = ['NAZWISKO', 'LICZBA']
+            df['NAZWISKO'] = df['NAZWISKO'].astype(str).str.strip().str.upper()
+            df['LICZBA'] = pd.to_numeric(df['LICZBA'], errors='coerce').fillna(0).astype(int)
+            return df
+        return pd.DataFrame()
     except Exception as e:
+        st.error(f"Szczegóły błędu: {e}")
         return pd.DataFrame()
 
 st.title("📊 Oficjalny Licznik Nazwisk 2025")
